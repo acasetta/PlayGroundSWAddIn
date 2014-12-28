@@ -11,6 +11,10 @@ using SolidWorks.Interop.swconst;
 using SolidWorksTools;
 using SolidWorksTools.File;
 
+using NLog;
+using NLog.Config;
+using NLog.Targets;
+
 
 namespace GreyWind.SolidPlayGround
 {
@@ -24,13 +28,17 @@ namespace GreyWind.SolidPlayGround
     {
         #region Local Variables
 
+        // logger class
+        private static Logger logger = null;
+        private static LogForm logForm = null;
+
         // Command Group
         private const int SWCommandGroupID = 318008;
 
         // Menu ItemIDs
-        private const int mainItemID1 = 1;
-        private const int mainItemID2 = 2;
-        private const int mainItemID3 = 3;
+        private const int mainItemID1 = 5;
+        private const int mainItemID2 = 6;
+        private const int mainItemID3 = 7;
 
 
         private ISldWorks _swApplication = null;
@@ -148,15 +156,32 @@ namespace GreyWind.SolidPlayGround
             //Setup callbacks
             _swApplication.SetAddinCallbackInfo(0, this, _swAddinID);
 
+            #region Setup Logger
+
+            // instantiate log window, otherwise, nlog will create a window of its own.
+            logForm = new LogForm();
+            logForm.Show();
+            logForm.Hide();
+
+            SetUpLogger();
+            logger = LogManager.GetCurrentClassLogger();
+            logger.Info("AddIn loaded successfully.");
+            
+            #endregion
+
             #region Setup the Command Manager
+
             _swCommandManager = _swApplication.GetCommandManager(cookie);
             AddCommandMgr();
+            
             #endregion
 
             #region Setup the Event Handlers
+            
             SwEventPtr = (SldWorks)_swApplication;
             _swOpenDocs = new Hashtable();
             AttachEventHandlers();
+            
             #endregion
 
             return true;
@@ -166,6 +191,8 @@ namespace GreyWind.SolidPlayGround
         {
             RemoveCommandMgr();
             DetachEventHandlers();
+
+            logger.Info("Disconnecting AddIn...");
 
             System.Runtime.InteropServices.Marshal.ReleaseComObject(_swCommandManager);
             _swCommandManager = null;
@@ -178,6 +205,7 @@ namespace GreyWind.SolidPlayGround
             GC.Collect();
             GC.WaitForPendingFinalizers();
 
+            logger.Info("Disconnected.");
             return true;
         }
         #endregion
@@ -189,7 +217,7 @@ namespace GreyWind.SolidPlayGround
             BitmapHandler bitmapHandler = new BitmapHandler();
 
             ICommandGroup cmdGroup;
-            int cmdIndex0, cmdIndex1;
+            int cmdIndex0, cmdIndex1, cmdIndex2;
             string Title = "PlayGround", ToolTip = "GreyWind PlayGround";
 
 
@@ -204,14 +232,14 @@ namespace GreyWind.SolidPlayGround
             //get the ID information stored in the registry
             bool getDataResult = _swCommandManager.GetGroupDataFromRegistry(SWCommandGroupID, out registryIDs);
 
-            int[] knownIDs = new int[2] { mainItemID1, mainItemID3};
+            int[] knownIDs = new int[3] { mainItemID1, mainItemID2, mainItemID3};
 
             if (getDataResult)
             {
                 //if the IDs don't match, reset the commandGroup
                 if (!CompareIDs((int[])registryIDs, knownIDs)) 
                 {
-                    _swApplication.SendMsgToUser2("Command Manager Buttons need to be updated!", (int)swMessageBoxIcon_e.swMbWarning, (int)swMessageBoxBtn_e.swMbOk);
+                    logger.Warn("Command Manager Buttons need to be updated!");
                     ignorePrevious = true;
                 }
             }
@@ -224,8 +252,11 @@ namespace GreyWind.SolidPlayGround
             cmdGroup.SmallMainIcon = bitmapHandler.CreateFileFromResourceBitmap("GreyWind.SolidPlayGround.Images.MainIconSmall.bmp", thisAssembly);
 
             int menuToolbarOption = (int)(swCommandItemType_e.swMenuItem | swCommandItemType_e.swToolbarItem);
+            int menuOption = (int)(swCommandItemType_e.swMenuItem);
+
             cmdIndex0 = cmdGroup.AddCommandItem2("Command #1", -1, "Command HintString", "Command ToolTip", 1, "STDCallBack", "", mainItemID1, menuToolbarOption);
-            cmdIndex1 = cmdGroup.AddCommandItem2("About", -1, "About PlayGround", "About PlayGround", 3, "STDCallBack", "", mainItemID3, menuToolbarOption);
+            cmdIndex1 = cmdGroup.AddCommandItem2("Show Log", -1, "Command HintString", "Command ToolTip", 1, "ShowLog", "EnableShowLog", mainItemID2, menuOption);
+            cmdIndex2 = cmdGroup.AddCommandItem2("About", -1, "About PlayGround", "About PlayGround", 3, "ShowAboutBox", "", mainItemID3, menuToolbarOption);
 
             cmdGroup.HasToolbar = true;
             cmdGroup.HasMenu = true;
@@ -256,14 +287,17 @@ namespace GreyWind.SolidPlayGround
 
                     CommandTabBox cmdBox = cmdTab.AddCommandTabBox();
 
-                    int[] cmdIDs = new int[2];
-                    int[] TextType = new int[2];
+                    int[] cmdIDs = new int[3];
+                    int[] TextType = new int[3];
 
                     cmdIDs[0] = cmdGroup.get_CommandID(cmdIndex0);
                     TextType[0] = (int)swCommandTabButtonTextDisplay_e.swCommandTabButton_TextBelow;
 
                     cmdIDs[1] = cmdGroup.get_CommandID(cmdIndex1);
                     TextType[1] = (int)swCommandTabButtonTextDisplay_e.swCommandTabButton_TextBelow;
+
+                    cmdIDs[2] = cmdGroup.get_CommandID(cmdIndex2);
+                    TextType[2] = (int)swCommandTabButtonTextDisplay_e.swCommandTabButton_TextBelow;
 
                     bResult = cmdBox.AddCommands(cmdIDs, TextType);
 
@@ -313,6 +347,40 @@ namespace GreyWind.SolidPlayGround
         public void STDCallBack()
         {
             _swApplication.SendMsgToUser("Not implemented yet!");
+        }
+
+        public void ShowLog()
+        {
+            logForm.Show();
+        }
+
+        public int EnableShowLog()
+        {
+            if (logForm.Visible == true)
+            {
+                return 0;
+            }
+            return 1;
+        }
+
+        public void ShowAboutBox()
+        {
+            AboutBox ab = new AboutBox();
+            SwAddinAttribute SWattr = null;
+            Type type = typeof(SolidWorksAddin);
+
+            foreach (System.Attribute attr in type.GetCustomAttributes(false))
+            {
+                if (attr is SwAddinAttribute)
+                {
+                    SWattr = attr as SwAddinAttribute;
+                    break;
+                }
+            }
+            ab.AppTitle = SWattr.Title;
+            ab.AppDescription = SWattr.Description;
+
+            ab.ShowDialog();
         }
 
         #endregion
@@ -476,6 +544,32 @@ namespace GreyWind.SolidPlayGround
         }
 
         #endregion
-    }
 
+        #region Logger Utility Methods
+
+        private void SetUpLogger()
+        {
+            LoggingConfiguration logConfig = new LoggingConfiguration();
+
+            RichTextBoxTarget textBoxTarget = new RichTextBoxTarget();
+            textBoxTarget.FormName = "LogForm";
+            textBoxTarget.ControlName = "LogTextBox";
+            textBoxTarget.AutoScroll = true;
+            textBoxTarget.UseDefaultRowColoringRules = true;
+            logConfig.AddTarget("textbox", textBoxTarget);
+            LoggingRule ruleTextBox = new LoggingRule("*", LogLevel.Trace, textBoxTarget);
+            logConfig.LoggingRules.Add(ruleTextBox);
+
+            FileTarget fileTarget = new FileTarget();
+            fileTarget.FileName = @"${specialfolder:dir=Logs:folder=LocalApplicationData}/log.txt";
+            fileTarget.Layout = @"${date:format=HH\:MM\:ss} ${callsite} ${message}";
+            logConfig.AddTarget("file", fileTarget);
+            LoggingRule ruleFile = new LoggingRule("*", LogLevel.Trace, fileTarget);
+            logConfig.LoggingRules.Add(ruleFile);
+
+            LogManager.Configuration = logConfig;
+        }
+
+        #endregion
+    }
 }
